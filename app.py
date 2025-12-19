@@ -1,169 +1,114 @@
 import streamlit as st
+import pickle
 import pandas as pd
-import numpy as np
-import joblib
+from math import sin, cos, pi
 
 # ===============================
-# تحميل الموديل
+# Load model & reference stats
 # ===============================
-model = joblib.load("xgb_delay_model.pkl")
+with open("xgb_delay_model.pkl", "rb") as f:
+    model = pickle.load(f)
 
-# ===============================
-# Title
-# ===============================
-st.title("🚍 Public Transport Delay Prediction")
-st.write("Predict delay score, category, and estimated delay time")
+with open("reference_stats.pkl", "rb") as f:
+    stats = pickle.load(f)
 
-st.divider()
+global_mean = stats["global_mean"]
 
 # ===============================
-# User Inputs
+# Helper functions
 # ===============================
-route = st.selectbox(
-    "Route",
-    ["R1", "R2", "R3", "R4"]
-)
+def hour_sin_cos(hour):
+    return sin(2 * pi * hour / 24), cos(2 * pi * hour / 24)
 
-hour = st.slider(
-    "Hour of the Day",
-    0, 23, 8
-)
-
-day_of_week = st.selectbox(
-    "Day of Week",
-    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-)
-
-weather = st.selectbox(
-    "Weather Condition",
-    ["Sunny", "Rainy", "Cloudy"]
-)
-
-passenger_count = st.number_input(
-    "Passenger Count",
-    min_value=1,
-    max_value=500,
-    value=100
-)
-
-latitude = st.number_input("Latitude", value=24.5)
-longitude = st.number_input("Longitude", value=32.5)
-
-st.divider()
-
-# ===============================
-# Button
-# ===============================
-if st.button("Predict Delay 🚦"):
-
-    # ===============================
-    # Feature Engineering
-    # ===============================
-
-    # day_of_week numeric
-    day_map = {
-        "Monday": 0, "Tuesday": 1, "Wednesday": 2,
-        "Thursday": 3, "Friday": 4,
-        "Saturday": 5, "Sunday": 6
-    }
-    day_num = day_map[day_of_week]
-
-    # weekend
-    is_weekend = 1 if day_num >= 5 else 0
-
-    # hour cyclic encoding
-    hour_sin = np.sin(2 * np.pi * hour / 24)
-    hour_cos = np.cos(2 * np.pi * hour / 24)
-
-    # passenger scaling (نفس منطق التدريب)
-    passenger_count_scaled = passenger_count / 500
-
-    # ===============================
-    # One-Hot Encoding (Route)
-    # ===============================
-    route_R1 = 1 if route == "R1" else 0
-    route_R2 = 1 if route == "R2" else 0
-    route_R3 = 1 if route == "R3" else 0
-    route_R4 = 1 if route == "R4" else 0
-
-    # ===============================
-    # One-Hot Encoding (Weather)
-    # ===============================
-    weather_sunny = 1 if weather == "Sunny" else 0
-    weather_rainy = 1 if weather == "Rainy" else 0
-    weather_cloudy = 1 if weather == "Cloudy" else 0
-
-    # weather severity (منطقي)
-    weather_severity = {
-        "Sunny": 0,
-        "Cloudy": 1,
-        "Rainy": 2
-    }[weather]
-
-    # ===============================
-    # IMPORTANT
-    # ===============================
-    # scores دي كانت معمولة من الداتا
-    # في الإنتاج نستخدم متوسطات ثابتة (baseline)
-    score_route = 1.0
-    score_hour = 1.0
-    score_day = 1.0
-    score_weather = 1.0
-
-    route_frequency_scaled = 0.5  # قيمة افتراضية منطقية
-
-    # ===============================
-    # Create Input DataFrame
-    # ===============================
-    input_df = pd.DataFrame([{
-        "latitude": latitude,
-        "longitude": longitude,
-        "hour_sin": hour_sin,
-        "hour_cos": hour_cos,
-        "is_weekend": is_weekend,
-        "passenger_count_scaled": passenger_count_scaled,
-        "score_route": score_route,
-        "score_hour": score_hour,
-        "score_day": score_day,
-        "score_weather": score_weather,
-        "route_frequency_scaled": route_frequency_scaled,
-        "weather_severity": weather_severity,
-
-        "route_id_R1": route_R1,
-        "route_id_R2": route_R2,
-        "route_id_R3": route_R3,
-        "route_id_R4": route_R4,
-
-        "weather_sunny": weather_sunny,
-        "weather_rainy": weather_rainy,
-        "weather_cloudy": weather_cloudy
-    }])
-
-    # ===============================
-    # Prediction
-    # ===============================
-    delay_score = model.predict(input_df)[0]
-
-    # ===============================
-    # Convert score to minutes
-    # ===============================
-    estimated_minutes = delay_score * 60
-
-    # ===============================
-    # Category
-    # ===============================
-    if estimated_minutes < 20:
-        category = "🟢 Low Delay"
-    elif estimated_minutes < 40:
-        category = "🟡 Medium Delay"
+def delay_category(score):
+    if score < 0.9:
+        return "Low Delay"
+    elif score < 1.2:
+        return "Medium Delay"
     else:
-        category = "🔴 High Delay"
+        return "High Delay"
 
-    # ===============================
-    # Output
-    # ===============================
-    st.success("Prediction Completed ✅")
+# ===============================
+# Streamlit UI
+# ===============================
+st.set_page_config(page_title="🚍 Delay Prediction", page_icon="🚌", layout="centered")
+st.title("🚍 Public Transport Delay Prediction")
+st.markdown("Predict delays for public transport trips based on route, time, and weather.")
 
-    st.metric("Delay Score", round(delay_score, 2))
-    st.metric("Estimated Delay (minutes)", int(estimated_minutes))
-    st.metric("Delay Category", category)
+with st.form("trip_form"):
+    st.subheader("Enter Trip Details")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        route = st.selectbox("Select Route", list(stats["route_mean"].keys()))
+        day = st.selectbox(
+            "Day of Week",
+            {0: "Monday", 1: "Tuesday", 2: "Wednesday", 3: "Thursday",
+             4: "Friday", 5: "Saturday", 6: "Sunday"}.keys(),
+            format_func=lambda x: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][x]
+        )
+        hour = st.slider("Hour of Day", 0, 23, 8)
+    
+    with col2:
+        weather = st.selectbox("Weather Condition", list(stats["weather_mean"].keys()))
+        passenger_count = st.number_input("Passenger Count", min_value=1, value=50)
+
+    submitted = st.form_submit_button("Predict Delay")
+
+# ===============================
+# Feature Engineering
+# ===============================
+hour_sin, hour_cos = hour_sin_cos(hour)
+is_weekend = 1 if day >= 5 else 0
+passenger_scaled = passenger_count / 300  # same scaling as training
+
+score_route = global_mean / stats["route_mean"][route]
+score_hour = global_mean / stats["hour_mean"][hour]
+score_day = global_mean / stats["day_mean"][day]
+score_weather = global_mean / stats["weather_mean"][weather]
+
+# ===============================
+# Build input DataFrame
+# ===============================
+input_data = pd.DataFrame([{
+    "latitude": 0,  # dummy value, model needs it
+    "longitude": 0, # dummy value, model needs it
+    "hour_sin": hour_sin,
+    "hour_cos": hour_cos,
+    "is_weekend": is_weekend,
+    "passenger_count_scaled": passenger_scaled,
+    "score_route": score_route,
+    "score_hour": score_hour,
+    "score_day": score_day,
+    "score_weather": score_weather,
+    "route_frequency_scaled": 1.0,
+    "weather_severity": 1.0,
+    "route_id_R1": 1 if route=="R1" else 0,
+    "route_id_R2": 1 if route=="R2" else 0,
+    "route_id_R3": 1 if route=="R3" else 0,
+    "route_id_R4": 1 if route=="R4" else 0,
+    "weather_rainy": 1 if weather=="Rainy" else 0,
+    "weather_sunny": 1 if weather=="Sunny" else 0,
+    "weather_cloudy": 1 if weather=="Cloudy" else 0,
+}])
+
+# Reorder columns exactly like training data
+columns_order = ['latitude', 'longitude', 'hour_sin', 'hour_cos', 'is_weekend',
+                 'passenger_count_scaled', 'score_route', 'score_hour', 'score_day',
+                 'score_weather', 'route_frequency_scaled', 'weather_severity',
+                 'route_id_R2', 'route_id_R3', 'route_id_R4',
+                 'weather_rainy', 'weather_sunny', 'weather_cloudy', 'route_id_R1']
+input_data = input_data[columns_order]
+
+# ===============================
+# Prediction
+# ===============================
+if submitted:
+    delay_score = model.predict(input_data)[0]
+    category = delay_category(delay_score)
+    estimated_minutes = delay_score * global_mean
+
+    st.success("📊 Prediction Results")
+    st.markdown(f"**Delay Score:** {delay_score:.2f}")
+    st.markdown(f"**Category:** {category}")
+    st.markdown(f"**Estimated Delay:** {estimated_minutes:.1f} minutes")
